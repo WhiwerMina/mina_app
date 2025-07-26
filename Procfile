@@ -1,1 +1,2 @@
-web: streamlit run mina.py --server.port 8000 --server.address 0.0.0.0
+OPENAI_API_KEY=sem_daj_svoj_api_kluc
+DATABASE_URL=sem_daj_url_z_renderu
