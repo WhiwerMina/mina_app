@@ -1,38 +1,57 @@
-import streamlit as st
-from openai import OpenAI
-import json
 import os
+import openai
+import psycopg2
+from flask import Flask, request, jsonify
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+app = Flask(__name__)
 
-def load_memory():
-    if os.path.exists("memory.json"):
-        with open("memory.json", "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
+openai.api_key = os.getenv("OPENAI_API_KEY")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-def save_memory(messages):
-    with open("memory.json", "w", encoding="utf-8") as f:
-        json.dump(messages, f, ensure_ascii=False, indent=2)
+def get_db_connection():
+    conn = psycopg2.connect(DATABASE_URL)
+    return conn
 
-st.title("💬 Chat s Mínou")
+def save_message(role, content):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS chat_history (id SERIAL PRIMARY KEY, role TEXT, content TEXT)")
+    cur.execute("INSERT INTO chat_history (role, content) VALUES (%s, %s)", (role, content))
+    conn.commit()
+    cur.close()
+    conn.close()
 
-if "messages" not in st.session_state:
-    st.session_state.messages = load_memory()
+def load_history():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS chat_history (id SERIAL PRIMARY KEY, role TEXT, content TEXT)")
+    cur.execute("SELECT role, content FROM chat_history ORDER BY id ASC")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [{"role": r, "content": c} for r, c in rows]
 
-for msg in st.session_state.messages:
-    st.chat_message(msg["role"]).write(msg["content"])
+@app.route("/chat", methods=["POST"])
+def chat():
+    user_message = request.json.get("message")
+    save_message("user", user_message)
 
-if prompt := st.chat_input("Napíš správu..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    messages = [{"role": "system", "content": "Si Mína, prísna dominantna pani, ktorá užívateľa vychováva a pamätá si celú históriu."}]
+    messages += load_history()
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=st.session_state.messages
+    response = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=messages
     )
 
-    reply = response.choices[0].message.content
-    st.session_state.messages.append({"role": "assistant", "content": reply})
+    bot_message = response.choices[0].message["content"]
+    save_message("assistant", bot_message)
 
-    st.chat_message("assistant").write(reply)
-    save_memory(st.session_state.messages)
+    return jsonify({"reply": bot_message})
+
+@app.route("/", methods=["GET"])
+def home():
+    return "Mína je spustená a čaká na správy!"
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
