@@ -7,73 +7,60 @@ import os
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Funkcia na pripojenie k databáze
-def get_connection():
-    return psycopg2.connect(os.getenv("DATABASE_URL"), sslmode="require")
+def get_db_connection():
+    return psycopg2.connect(os.getenv("DATABASE_URL"))
 
-# Funkcia na vytvorenie tabuľky, ak ešte neexistuje
-def init_db():
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id SERIAL PRIMARY KEY,
-            role TEXT,
-            content TEXT
-        )
-    """)
-    conn.commit()
-    cur.close()
-    conn.close()
-
-# Funkcia na uloženie správy
-def save_message(role, content):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("INSERT INTO messages (role, content) VALUES (%s, %s)", (role, content))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-# Funkcia na načítanie histórie
+# Načítanie histórie správ z databázy
 def load_messages():
-    conn = get_connection()
+    conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT role, content FROM messages ORDER BY id ASC")
+    cur.execute("SELECT role, content FROM messages ORDER BY id;")
     rows = cur.fetchall()
-    cur.close()
     conn.close()
     return [{"role": r[0], "content": r[1]} for r in rows]
 
-# Inicializácia databázy
-init_db()
+# Uloženie správy do databázy
+def save_message(role, content):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO messages (role, content) VALUES (%s, %s);", (role, content))
+    conn.commit()
+    conn.close()
 
-# UI
+# Nastavenie stránky
+st.set_page_config(page_title="Chat s Mínou", page_icon="💬")
 st.title("Chat s Mínou")
 
 # Načítanie histórie
-history = load_messages()
-for msg in history:
-    if msg["role"] == "user":
-        st.markdown(f"**Ty:** {msg['content']}")
-    else:
-        st.markdown(f"**Mína:** {msg['content']}")
+messages = load_messages()
 
-# Vstup od používateľa
+# Zobrazenie histórie
+for msg in messages:
+    if msg["role"] == "user":
+        st.write(f"Ty: {msg['content']}")
+    elif msg["role"] == "assistant":
+        st.write(f"Mína: {msg['content']}")
+
+# Vstup používateľa
 user_input = st.text_input("Napíš správu:")
 
-if st.button("Odoslať") and user_input:
+# Odoslanie správy
+if st.button("Odoslať") and user_input.strip() != "":
     save_message("user", user_input)
 
-    # Volanie OpenAI API
+    # Príprava kontextu pre API
+    api_messages = [{"role": "system", "content": "Si Mína, milá a priateľská AI, ktorá odpovedá úprimne a srdečne."}]
+    api_messages += load_messages()
+
+    # Volanie API
     response = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "Si milá a priateľská asistentka menom Mína."},
-            *load_messages()  # celá história
-        ]
+        messages=api_messages
     )
 
-    assistant_reply = response.choices[0].message["content"]
-    save_message("assistant", assistant_reply)
+    # Správny prístup ku content
+    assistant_reply = response.choices[0].message.content
 
-    st.experimental_rerun()
+    # Uloženie odpovede a refresh stránky
+    save_message("assistant", assistant_reply)
+    st.rerun()
